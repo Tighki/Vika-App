@@ -10,8 +10,10 @@ datas = [("travelhub/assets/logo.png", "assets")]
 hiddenimports = [
     "travelhub",
     "travelhub.db",
+    "travelhub.mariadb_conn",
     "travelhub.matching",
     "travelhub.ui",
+    "pymysql",
 ]
 runtime_hooks = []
 

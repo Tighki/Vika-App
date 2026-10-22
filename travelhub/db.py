@@ -1,14 +1,15 @@
-"""SQLite: люди, заявки, экскурсии, брони, лавка, заказы, оценки, журнал.
+"""MariaDB: люди, заявки, экскурсии, брони, лавка, заказы, оценки, журнал.
 
 Пароли хранятся как хеш. Повторный запуск не дублирует демонстрационные строки.
+Переменные: DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME (по умолчанию travelhub).
 """
 
 import hashlib
 import os
 import re
-import sqlite3
-import sys
 from datetime import datetime
+
+from travelhub.mariadb_conn import IntegrityError, connect
 
 ROLES = ("admin", "guide", "producer", "tourist")
 THEMES = ("nature", "history", "gastro", "city", "active", "other")
@@ -88,32 +89,6 @@ ORDER_FLOW = {
 }
 
 
-def _app_dir():
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def db_path():
-    override = os.environ.get("TRAVELHUB_DB")
-    if override:
-        parent = os.path.dirname(os.path.abspath(override))
-        if parent:
-            os.makedirs(parent, exist_ok=True)
-        return override
-    root = _app_dir()
-    data_dir = os.path.join(root, "data")
-    os.makedirs(data_dir, exist_ok=True)
-    return os.path.join(data_dir, "travelhub.db")
-
-
-def connect():
-    conn = sqlite3.connect(db_path())
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
-
-
 def now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -150,8 +125,8 @@ def init_db():
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS users (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                login       TEXT NOT NULL UNIQUE,
+                id          INT AUTO_INCREMENT PRIMARY KEY,
+                login       VARCHAR(64) NOT NULL UNIQUE,
                 password    TEXT NOT NULL,
                 full_name   TEXT NOT NULL,
                 role        TEXT NOT NULL DEFAULT 'tourist'
@@ -164,7 +139,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS requests (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                id              INT AUTO_INCREMENT PRIMARY KEY,
                 title           TEXT NOT NULL,
                 description     TEXT NOT NULL DEFAULT '',
                 theme           TEXT NOT NULL DEFAULT 'other',
@@ -178,12 +153,8 @@ def init_db():
                 created_at      TEXT NOT NULL
             );
 
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_open_request
-            ON requests(tourist_id, title)
-            WHERE status IN ('new', 'assigned');
-
             CREATE TABLE IF NOT EXISTS tours (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                id              INT AUTO_INCREMENT PRIMARY KEY,
                 title           TEXT NOT NULL,
                 description     TEXT NOT NULL DEFAULT '',
                 theme           TEXT NOT NULL,
@@ -198,7 +169,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS bookings (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          INT AUTO_INCREMENT PRIMARY KEY,
                 tour_id     INTEGER NOT NULL REFERENCES tours(id),
                 tourist_id  INTEGER NOT NULL REFERENCES users(id),
                 people      INTEGER NOT NULL CHECK (people > 0),
@@ -206,12 +177,8 @@ def init_db():
                 created_at  TEXT NOT NULL
             );
 
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_booking_active
-            ON bookings(tour_id, tourist_id)
-            WHERE status = 'confirmed';
-
             CREATE TABLE IF NOT EXISTS products (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           INT AUTO_INCREMENT PRIMARY KEY,
                 producer_id  INTEGER NOT NULL REFERENCES users(id),
                 name         TEXT NOT NULL,
                 description  TEXT NOT NULL DEFAULT '',
@@ -223,7 +190,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS orders (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                id           INT AUTO_INCREMENT PRIMARY KEY,
                 tourist_id   INTEGER NOT NULL REFERENCES users(id),
                 producer_id  INTEGER NOT NULL REFERENCES users(id),
                 status       TEXT NOT NULL DEFAULT 'new',
@@ -232,7 +199,7 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS order_items (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          INT AUTO_INCREMENT PRIMARY KEY,
                 order_id    INTEGER NOT NULL REFERENCES orders(id),
                 product_id  INTEGER NOT NULL REFERENCES products(id),
                 name        TEXT NOT NULL,
@@ -241,18 +208,18 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS reviews (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          INT AUTO_INCREMENT PRIMARY KEY,
                 author_id   INTEGER NOT NULL REFERENCES users(id),
-                target_kind TEXT NOT NULL,
+                target_kind VARCHAR(16) NOT NULL,
                 target_id   INTEGER NOT NULL,
                 rating      INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
-                body        TEXT NOT NULL DEFAULT '',
-                created_at  TEXT NOT NULL,
+                body        TEXT NOT NULL,
+                created_at  VARCHAR(19) NOT NULL,
                 UNIQUE (author_id, target_kind, target_id)
             );
 
             CREATE TABLE IF NOT EXISTS messages (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                id          INT AUTO_INCREMENT PRIMARY KEY,
                 request_id  INTEGER NOT NULL REFERENCES requests(id),
                 user_id     INTEGER NOT NULL REFERENCES users(id),
                 body        TEXT NOT NULL,
@@ -260,8 +227,8 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS history (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                entity_kind TEXT NOT NULL,
+                id          INT AUTO_INCREMENT PRIMARY KEY,
+                entity_kind VARCHAR(32) NOT NULL,
                 entity_id   INTEGER NOT NULL,
                 user_id     INTEGER,
                 action      TEXT NOT NULL,
@@ -657,7 +624,7 @@ def create_user(login, password, full_name, role="tourist", specialty="other", r
                 (login, hash_password(password), full_name, role, specialty, region, about, int(is_active), now()),
             )
         return True, "Пользователь создан"
-    except sqlite3.IntegrityError:
+    except IntegrityError:
         return False, "Логин уже занят"
     finally:
         conn.close()
@@ -845,7 +812,7 @@ def create_request(title, description, theme, region, people, preferred_date, pr
             request_id = cur.lastrowid
             _log(conn, "request", request_id, tourist_id, "Заявка создана")
         return request_id, None
-    except sqlite3.IntegrityError:
+    except IntegrityError:
         return None, "Такая заявка уже открыта"
     finally:
         conn.close()
@@ -1205,7 +1172,7 @@ def book_tour(tour_id, tourist_id, people):
             _log(conn, "tour", tour_id, tourist_id, f"Новая бронь: {people_count} чел.")
             _sync_tour_capacity(conn, tour_id, tourist_id)
         return booking_id, None
-    except sqlite3.IntegrityError:
+    except IntegrityError:
         return None, "Вы уже записаны на эту экскурсию"
     finally:
         conn.close()
@@ -1453,7 +1420,7 @@ def create_order(tourist_id, product_id, qty):
 
 _ORDER_SQL = (
     "SELECT o.*, t.full_name AS tourist_name, p.full_name AS producer_name,"
-    " (SELECT group_concat(oi.name || ' × ' || oi.qty, ', ') FROM order_items oi WHERE oi.order_id = o.id) AS items_label"
+    " (SELECT GROUP_CONCAT(CONCAT(oi.name, ' × ', oi.qty) SEPARATOR ', ') FROM order_items oi WHERE oi.order_id = o.id) AS items_label"
     " FROM orders o"
     " JOIN users t ON t.id = o.tourist_id"
     " JOIN users p ON p.id = o.producer_id"
@@ -1611,7 +1578,7 @@ def add_review(author_id, kind, target_id, rating, body):
                 (author_id, kind, target_id, stars, body, now()),
             )
         return True, "Оценка сохранена"
-    except sqlite3.IntegrityError:
+    except IntegrityError:
         return False, "Вы уже оставляли оценку"
     finally:
         conn.close()
