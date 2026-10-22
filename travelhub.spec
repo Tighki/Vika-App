@@ -40,6 +40,20 @@ if sys.platform == "win32":
         "cairo",
     ]
     runtime_hooks.append("travelhub/windows_runtime.py")
+else:
+    hiddenimports += [
+        "gi",
+        "gi.repository.Gtk",
+        "gi.repository.Adw",
+        "gi.repository.Gdk",
+        "gi.repository.GdkPixbuf",
+        "gi.repository.Gio",
+        "gi.repository.GLib",
+        "gi.repository.GObject",
+        "gi.repository.Pango",
+        "gi.repository.cairo",
+        "cairo",
+    ]
 
 a = Analysis(
     ["main.py"],
@@ -48,7 +62,14 @@ a = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    hooksconfig={},
+    hooksconfig={
+        "gi": {
+            "module-versions": {
+                "Gtk": "4.0",
+                "Gdk": "4.0",
+            },
+        },
+    },
     runtime_hooks=runtime_hooks,
     excludes=[],
     noarchive=False,
